@@ -13,6 +13,9 @@
 #define TWO_PI            6.2831853071795864769252867665590057683943f
 #define SQRT_OF_ONE_THIRD 0.5773502691896257645091487805019574556476f
 #define EPSILON           0.00001f
+#define EPSILON_GLASS 0.001f
+#define GLASS_AIR_RATIO 1.5f
+#define AIR_GLASS_RATIO 0.66666666666666666666666666666666f
 
 namespace utilityCore {
     extern float clamp(float f, float min, float max);

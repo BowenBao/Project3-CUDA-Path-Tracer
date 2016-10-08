@@ -362,6 +362,32 @@ void pathtraceFree() {
     checkCUDAError("pathtraceFree");
 }
 
+__host__ __device__ float getFresnelCoef(const glm::vec3& direction, const glm::vec3 materialNorm)
+{
+	//float NdotI = glm::dot(direction, materialNorm);
+	//float etai = 1, etat = 1.5;
+
+	//glm::vec3 norm = materialNorm;
+
+	//if (NdotI < 0)
+	//{
+	//	NdotI = -NdotI;
+	//}
+	//else
+	//{
+	//	norm = -norm;
+	//	float tmp = etai;
+	//	etai = etat;
+	//	etat = tmp;
+	//}
+
+	//float eta = etai / etat;
+
+	float r0 = glm::pow((GLASS_AIR_RATIO - 1.0f) / (GLASS_AIR_RATIO + 1.0f), 2);
+	return r0 + (1.0f - r0) * glm::pow(1.0f - glm::dot(materialNorm, -direction), 5);
+}
+
+
 /**
 * Generate PathSegments with rays from the camera through the screen into the
 * scene, which is the first bounce of rays.
@@ -387,6 +413,7 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
 			- cam.right * cam.pixelLength.x * ((float)x - (float)cam.resolution.x * 0.5f)
 			- cam.up * cam.pixelLength.y * ((float)y - (float)cam.resolution.y * 0.5f)
 			);
+		segment.ray.outside = true;
 
 		segment.pixelIndex = index;
 		segment.remainingBounces = traceDepth;
@@ -417,7 +444,7 @@ __global__ void computeIntersections(
 		glm::vec3 normal;
 		float t_min = FLT_MAX;
 		int hit_geom_index = -1;
-		bool outside = true;
+		//bool outside = true;
 
 		glm::vec3 tmp_intersect;
 		glm::vec3 tmp_normal;
@@ -430,11 +457,11 @@ __global__ void computeIntersections(
 
 			if (geom.type == CUBE)
 			{
-				t = boxIntersectionTest(geom, pathSegment.ray, tmp_intersect, tmp_normal, outside);
+				t = boxIntersectionTest(geom, pathSegment.ray, tmp_intersect, tmp_normal, pathSegment.ray.outside);
 			}
 			else if (geom.type == SPHERE)
 			{
-				t = sphereIntersectionTest(geom, pathSegment.ray, tmp_intersect, tmp_normal, outside);
+				t = sphereIntersectionTest(geom, pathSegment.ray, tmp_intersect, tmp_normal, pathSegment.ray.outside);
 			}
 			// TODO: add more intersection tests here... triangle? metaball? CSG?
 
@@ -549,6 +576,7 @@ __global__ void shadeRealMaterial(
 			//pathSegments[idx].color *= (materialColor * lightTerm) * 0.3f + ((1.0f - intersection.t * 0.02f) * materialColor) * 0.7f;
 			//pathSegments[idx].color *= u01(rng); // apply some noise because why not
 			pathSegments[idx].color *= materialColor;
+
 			// BSDF
 			if (material.hasReflective)
 			{
@@ -574,14 +602,47 @@ __global__ void shadeRealMaterial(
 			}
 			else if (material.hasRefractive)
 			{
-				// snell's law
-				// currently use diffuse.
-				glm::vec3 new_direction = calculateRandomDirectionInHemisphere(intersection.surfaceNormal,
-					rng);
-				glm::vec3 new_origin = pathSegments[idx].ray.direction * intersection.t + pathSegments[idx].ray.origin + EPSILON * new_direction;
+				float cosi = glm::dot(pathSegments[idx].ray.direction, intersection.surfaceNormal);
+				float etai = 1, etat = 1.5;
+				glm::vec3 n = intersection.surfaceNormal;
+				if (cosi < 0)
+				{
+					cosi = -cosi;
+				}
+				else
+				{
+					float tmp = etai;
+					etai = etat;
+					etat = tmp;
+				}
 
-				pathSegments[idx].ray.direction = new_direction;
-				pathSegments[idx].ray.origin = new_origin;
+				float eta = etai / etat;
+				float k = 1 - eta * eta * (1 - cosi * cosi);
+
+				if (k < 0)
+				{
+					// reflection
+					glm::vec3 new_direction = glm::reflect(pathSegments[idx].ray.direction, intersection.surfaceNormal);
+					glm::vec3 new_origin = pathSegments[idx].ray.direction * intersection.t + pathSegments[idx].ray.origin + EPSILON * new_direction;
+
+					pathSegments[idx].ray.direction = new_direction;
+					pathSegments[idx].ray.origin = new_origin;
+				}
+				else
+				{
+					// refraction
+					glm::vec3 new_direction = (eta * cosi - glm::sqrt(k)) * n + pathSegments[idx].ray.direction * eta;
+					glm::vec3 new_origin = pathSegments[idx].ray.direction * intersection.t + pathSegments[idx].ray.origin + EPSILON_GLASS * new_direction;
+					
+					//printf("refraction light origin %f,%f,%f direction %f,%f,%f to new origin %f,%f,%f direction %f,%f,%f\n",
+					//	pathSegments[idx].ray.origin.x, pathSegments[idx].ray.origin.y, pathSegments[idx].ray.origin.z,
+					//	pathSegments[idx].ray.direction.x, pathSegments[idx].ray.direction.y, pathSegments[idx].ray.direction.z,
+					//	new_origin.x, new_origin.y, new_origin.z,
+					//	new_direction.x, new_direction.y, new_direction.z
+					//	);
+					pathSegments[idx].ray.direction = new_direction;
+					pathSegments[idx].ray.origin = new_origin;
+				}
 			}
 			else
 			{
@@ -592,7 +653,6 @@ __global__ void shadeRealMaterial(
 
 				pathSegments[idx].ray.direction = new_direction;
 				pathSegments[idx].ray.origin = new_origin;
-
 			}
 			pathSegments[idx].remainingBounces--;
 		}
