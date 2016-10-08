@@ -162,3 +162,10 @@ cube
 material 5
 TRANS 1.2 5.5 3
 SCALE 1.5 1 1
+
+// glass cube 3
+OBJECT 12
+cube
+material 5
+TRANS -3.49 .01 -3.49
+SCALE 3 3 3
