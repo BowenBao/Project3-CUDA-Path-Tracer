@@ -7,6 +7,8 @@
 
 #define BACKGROUND_COLOR (glm::vec3(0.0f))
 
+#define FIRST_BOUNCE_CACHE 1
+
 enum GeomType {
     SPHERE,
     CUBE,

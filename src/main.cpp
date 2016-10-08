@@ -72,6 +72,8 @@ int main(int argc, char** argv) {
     // GLFW main loop
     mainLoop();
 
+	cin.get();
+
     return 0;
 }
 
