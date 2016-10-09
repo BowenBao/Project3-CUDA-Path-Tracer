@@ -9,6 +9,7 @@
 
 #define FIRST_BOUNCE_CACHE 0
 #define ANTIALIASING 1
+#define DIRECT_LIGHTING 1
 
 enum GeomType {
     SPHERE,
@@ -68,6 +69,7 @@ struct PathSegment {
 	glm::vec3 color;
 	int pixelIndex;
 	int remainingBounces;
+	bool bounceCompleted;
 };
 
 // Use with a corresponding PathSegment to do:

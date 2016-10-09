@@ -74,8 +74,16 @@ namespace StreamCompaction {
 			if (index >= n) return;
 			int flagValue = 0;
 			if (compactOnes) flagValue = 1;
-			if (idata[index].remainingBounces > 0) bools[index] = flagValue;
-			else bools[index] = 1 - flagValue;
+			if (DIRECT_LIGHTING)
+			{
+				if (!idata[index].bounceCompleted) bools[index] = flagValue;
+				else bools[index] = 1 - flagValue;
+			}
+			else
+			{
+				if (idata[index].remainingBounces > 0) bools[index] = flagValue;
+				else bools[index] = 1 - flagValue;
+			}
 		}
 
 		/**
@@ -429,6 +437,7 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
 
 		segment.pixelIndex = index;
 		segment.remainingBounces = traceDepth;
+		segment.bounceCompleted = false;
 	}
 }
 
@@ -502,56 +511,29 @@ __global__ void computeIntersections(
 	}
 }
 
-// LOOK: "fake" shader demonstrating what you might do with the info in
-// a ShadeableIntersection, as well as how to use thrust's random number
-// generator. Observe that since the thrust random number generator basically
-// adds "noise" to the iteration, the image should start off noisy and get
-// cleaner as more iterations are computed.
-//
-// Note that this shader does NOT do a BSDF evaluation!
-// Your shaders should handle that - this can allow techniques such as
-// bump mapping.
-__global__ void shadeFakeMaterial(
-	int iter
-	, int num_paths
-	, ShadeableIntersection * shadeableIntersections
-	, PathSegment * pathSegments
-	, Material * materials
-	)
+__global__ void computeDirectLighting(int iter, int num_paths, PathSegment *dev_paths, const Geom &dev_geoms)
 {
 	int idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (idx < num_paths)
+	if (idx >= num_paths) return;
+
+	glm::vec3 lightPoint = dev_geoms.translation;
+	dev_paths[idx].ray.direction = glm::normalize(lightPoint - dev_paths[idx].ray.origin);
+}
+
+__global__ void shadeDirectLightingMaterial(int iter, int num_paths,
+	ShadeableIntersection *shadeableIntersections, PathSegment *pathSegment, Material *materials)
+{
+	int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= num_paths) return;
+	ShadeableIntersection intersection = shadeableIntersections[idx];
+	if (intersection.t > 0.0f)
 	{
-		ShadeableIntersection intersection = shadeableIntersections[idx];
-		if (intersection.t > 0.0f) { // if the intersection exists...
-			// Set up the RNG
-			// LOOK: this is how you use thrust's RNG! Please look at
-			// makeSeededRandomEngine as well.
-			thrust::default_random_engine rng = makeSeededRandomEngine(iter, idx, 0);
-			thrust::uniform_real_distribution<float> u01(0, 1);
-
-			Material material = materials[intersection.materialId];
-			glm::vec3 materialColor = material.color;
-
-			// If the material indicates that the object was a light, "light" the ray
-			if (material.emittance > 0.0f) {
-				pathSegments[idx].color *= (materialColor * material.emittance);
-			}
-			// Otherwise, do some pseudo-lighting computation. This is actually more
-			// like what you would expect from shading in a rasterizer like OpenGL.
-			// TODO: replace this! you should be able to start with basically a one-liner
-			else {
-				float lightTerm = glm::dot(intersection.surfaceNormal, glm::vec3(0.0f, 1.0f, 0.0f));
-				pathSegments[idx].color *= (materialColor * lightTerm) * 0.3f + ((1.0f - intersection.t * 0.02f) * materialColor) * 0.7f;
-				pathSegments[idx].color *= u01(rng); // apply some noise because why not
-			}
-			// If there was no intersection, color the ray black.
-			// Lots of renderers use 4 channel color, RGBA, where A = alpha, often
-			// used for opacity, in which case they can indicate "no opacity".
-			// This can be useful for post-processing and image compositing.
-		}
-		else {
-			pathSegments[idx].color = glm::vec3(0.0f);
+		Material material = materials[intersection.materialId];
+		if (material.emittance > 0.0f)
+		{
+			// hit light object
+			pathSegment[idx].color *= material.color * material.emittance;
+			pathSegment[idx].bounceCompleted = true;
 		}
 	}
 }
@@ -581,6 +563,7 @@ __global__ void shadeRealMaterial(
 			// Object is light
 			pathSegments[idx].color *= materialColor *material.emittance;
 			pathSegments[idx].remainingBounces = 0;
+			pathSegments[idx].bounceCompleted = true;
 		}
 		else
 		{
@@ -674,6 +657,7 @@ __global__ void shadeRealMaterial(
 		// hit nothing
 		pathSegments[idx].color = glm::vec3(0.0f);
 		pathSegments[idx].remainingBounces = 0;
+		pathSegments[idx].bounceCompleted = true;
 	}
 
 }
@@ -718,6 +702,7 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 	printf("Trace depth : %d\n", traceDepth);
 	const Camera &cam = hst_scene->state.camera;
 	const int pixelcount = cam.resolution.x * cam.resolution.y;
+	const int maxDepth = hst_scene->state.traceDepth;
 
 	// 2D block for generating ray from camera
 	const dim3 blockSize2d(8, 8);
@@ -868,36 +853,66 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 		cudaMemcpy(dev_path_end, tmp_segment_end, zeroCount * sizeof(PathSegment), cudaMemcpyDeviceToDevice);
 		checkCUDAError("Stream compaction.");
 
-		// thurst implementation
-		// Do stream compaction on dev_paths to remove finished rays.
-		//cudaMemcpy(tmp_segment, dev_paths, num_paths * sizeof(PathSegment), cudaMemcpyDeviceToHost);
-		//printf("cuda memcpy complete. pixel count:%d\n", num_paths);
-
-		//// rearrange dev_paths to put the ones with bounces left to the front.
-		//tmp_segment_end = thrust::partition(tmp_segment, tmp_segment_end, PathRemainingBounceNonZeroTest());
-		//printf("thrust partition complete. non-zero number: %d\n", tmp_segment_end - tmp_segment);
-
-		//cudaMemcpy(dev_paths, tmp_segment, num_paths * sizeof(PathSegment), cudaMemcpyHostToDevice);
-		//dev_path_end = dev_paths + (tmp_segment_end - tmp_segment);
-		//printf("cuda memcpy back complete %d path left\n", dev_path_end - dev_paths);
-
-		//checkCUDAError("thrust stream compaction");
-
-		if (dev_path_end <= dev_paths)
+		if (DIRECT_LIGHTING)
 		{
-			iterationComplete = true; // TODO: should be based off stream compaction results.
-			printf("Complete one iteration...");
+			// check depth against maxDepth
+			if (depth >= maxDepth)
+			{
+				num_paths = dev_path_end - dev_paths;
+				dim3 numblocksPathSegmentTracing = (num_paths + blockSize1d - 1) / blockSize1d;
+				// pick one light source
+				int geomIdx = 0;
+				for (auto geom : hst_scene->geoms)
+				{
+					if (hst_scene->materials[geom.materialid].emittance > 0)
+					{
+						break;
+					}
+					geomIdx++;
+				}
+
+				if (geomIdx >= hst_scene->geoms.size())
+				{
+					// no light source found.
+					iterationComplete = true;
+					break;
+				}
+
+				// apply direct lighting. Update final ray direction.
+				computeDirectLighting<<<numblocksPathSegmentTracing, blockSize1d>>>(iter, num_paths, dev_paths, dev_geoms[geomIdx]);
+				// compute intersection.
+				// clean shading chunks
+				cudaMemset(dev_intersections, 0, num_paths * sizeof(ShadeableIntersection));
+				computeIntersections << <numblocksPathSegmentTracing, blockSize1d >> > (
+					depth
+					, num_paths
+					, dev_paths
+					, dev_geoms
+					, hst_scene->geoms.size()
+					, dev_intersections
+					);
+				checkCUDAError("trace direct lighting bounce");
+				cudaDeviceSynchronize();
+				depth++;
+				printf("Compute direct lighting intersection \n");
+				shadeDirectLightingMaterial<<<numblocksPathSegmentTracing, blockSize1d>>>(iter, num_paths, dev_intersections, dev_paths, dev_materials);
+				checkCUDAError("shade direct lighting bounce");
+				printf("Shade direct lighting bounce using complete\n");
+
+				iterationComplete = true;
+			}
+		}
+		else
+		{
+			if (dev_path_end <= dev_paths)
+			{
+				iterationComplete = true;
+				printf("Complete one iteration...");
+			}
 		}
 
 		firstBounce = false;
 	}
-
-	// check path
-	//cudaMemcpy(tmp_segment, dev_paths, pixelcount * sizeof(PathSegment), cudaMemcpyDeviceToHost);
-	//printf("color of some pixel %f %f %f\n", tmp_segment[0].color.r, tmp_segment[0].color.g, tmp_segment[0].color.b);
-	//printf("color of some pixel %f %f %f\n", tmp_segment[1].color.r, tmp_segment[1].color.g, tmp_segment[1].color.b);
-	//printf("color of some pixel %f %f %f\n", tmp_segment[50000].color.r, tmp_segment[50000].color.g, tmp_segment[50000].color.b);
-
 
 	// Assemble this iteration and apply it to the image
 	dim3 numBlocksPixels = (pixelcount + blockSize1d - 1) / blockSize1d;

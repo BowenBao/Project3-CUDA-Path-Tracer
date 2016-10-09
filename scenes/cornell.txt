@@ -134,6 +134,7 @@ TRANS	1 6 -1.5
 ROTAT	0 0 0
 SCALE	3 3 3
 
+
 // Left wall light
 OBJECT 8
 cube
@@ -169,3 +170,11 @@ cube
 material 5
 TRANS -3.49 .01 -3.49
 SCALE 3 3 3
+
+// Sphere 3
+//OBJECT 13
+//sphere
+//material 5
+//TRANS       -4.249 9.249 -4.249
+//ROTAT       0 0 0
+//SCALE       1.5 1.5 1.5
