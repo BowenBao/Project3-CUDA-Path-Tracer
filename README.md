@@ -23,7 +23,7 @@ Here's the list of features of this project:
 
 ## Instruction to Run
 
-You can change the setup of the program in file utilities.h, where First bounce caching, antialiasing and direct lighting are all toggleable(note that since first bounce caching and antialiasing are conflicting features, only antialiasing is active if both are set to be true). 
+You can change the setup of the program in file utilities.h, where First bounce caching, antialiasing and direct lighting are all togglable(note that since first bounce caching and antialiasing are conflicting features, only antialiasing is active if both are set to be true). 
 
 ## Performance Analysis
 ### Performance of different implementation
@@ -46,7 +46,8 @@ I followed the algorithms in http://paulbourke.net/miscellaneous/aliasing/ when 
 ![](/img/antialiasing.png)
 
 ### Direct lighting.
-Most of the rays are wasted in our previous implementation, as they didn't contribute any color information as they hadn't hit the light source in their "last" bounce. With direct lighting however, we tried to make use of that information by adding an additional bounce at the end to reach the light source and record the color. Following are the comparison of rendering with and without direct lighting. At the same time, we are also comparing how the number of iterations affect the final result. 
+Most of the rays are wasted in our previous implementation, as they didn't contribute any color information because they hadn't hit the light source in their "last" bounce. With direct lighting however, we tried to make use of that information by adding an additional bounce at the end to reach the light source and record the color. Following are the comparison of rendering with and without direct lighting. At the same time, we are also comparing how the number of iterations affect the final result. 
 ![](/img/cornell_dl_5000_1000.png)
 ![](/img/cornell_5000_1000.png)
+
 As we could see in the graph, rendering with direct lighting achieves a brighter image under the same iteration. It also achieves a cleaner image much faster than rendering without direct lighting. 
