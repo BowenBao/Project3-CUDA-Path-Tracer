@@ -7,9 +7,6 @@
 
 #define BACKGROUND_COLOR (glm::vec3(0.0f))
 
-#define FIRST_BOUNCE_CACHE 0
-#define ANTIALIASING 1
-#define DIRECT_LIGHTING 1
 
 enum GeomType {
     SPHERE,

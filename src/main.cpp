@@ -1,6 +1,7 @@
 #include "main.h"
 #include "preview.h"
 #include <cstring>
+#include <chrono>
 
 static std::string startTimeString;
 
@@ -129,6 +130,8 @@ void runCuda() {
         pathtraceInit(scene);
     }
 
+	static double time = 0;
+
     if (iteration < renderState->iterations) {
         uchar4 *pbo_dptr = NULL;
         iteration++;
@@ -136,11 +139,20 @@ void runCuda() {
 
         // execute the kernel
         int frame = 0;
+
+		auto start = std::chrono::system_clock::now();
+
         pathtrace(pbo_dptr, frame, iteration);
+
+		std::chrono::duration<double, std::milli> diff = (std::chrono::system_clock::now() - start);
+		time += diff.count();
 
         // unmap buffer object
         cudaGLUnmapBufferObject(pbo);
     } else {
+		time /= renderState->iterations;
+		printf("Average time is %fms\n", time);
+
         saveImage();
         pathtraceFree();
         cudaDeviceReset();

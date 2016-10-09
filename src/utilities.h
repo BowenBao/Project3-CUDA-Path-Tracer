@@ -17,6 +17,12 @@
 #define GLASS_AIR_RATIO 1.5f
 #define AIR_GLASS_RATIO 0.66666666666666666666666666666666f
 
+
+#define FIRST_BOUNCE_CACHE 0
+#define ANTIALIASING 0
+#define DIRECT_LIGHTING 0
+#define COMPACTION 0
+
 namespace utilityCore {
     extern float clamp(float f, float min, float max);
     extern bool replaceString(std::string& str, const std::string& from, const std::string& to);

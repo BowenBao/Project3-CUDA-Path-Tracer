@@ -372,25 +372,6 @@ void pathtraceFree() {
 
 __host__ __device__ float getFresnelCoef(const glm::vec3& direction, const glm::vec3 materialNorm)
 {
-	//float NdotI = glm::dot(direction, materialNorm);
-	//float etai = 1, etat = 1.5;
-
-	//glm::vec3 norm = materialNorm;
-
-	//if (NdotI < 0)
-	//{
-	//	NdotI = -NdotI;
-	//}
-	//else
-	//{
-	//	norm = -norm;
-	//	float tmp = etai;
-	//	etai = etat;
-	//	etat = tmp;
-	//}
-
-	//float eta = etai / etat;
-
 	float r0 = glm::pow((GLASS_AIR_RATIO - 1.0f) / (GLASS_AIR_RATIO + 1.0f), 2);
 	return r0 + (1.0f - r0) * glm::pow(1.0f - glm::dot(materialNorm, -direction), 5);
 }
@@ -456,7 +437,7 @@ __global__ void computeIntersections(
 {
 	int path_index = blockIdx.x * blockDim.x + threadIdx.x;
 
-	if (path_index < num_paths)
+	if (path_index < num_paths && pathSegments[path_index].remainingBounces > 0)
 	{
 		PathSegment pathSegment = pathSegments[path_index];
 
@@ -567,9 +548,6 @@ __global__ void shadeRealMaterial(
 		}
 		else
 		{
-			//float lightTerm = glm::dot(intersection.surfaceNormal, glm::vec3(0.0f, 0.5f, 0.0f));
-			//pathSegments[idx].color *= (materialColor * lightTerm) * 0.3f + ((1.0f - intersection.t * 0.02f) * materialColor) * 0.7f;
-			//pathSegments[idx].color *= u01(rng); // apply some noise because why not
 			pathSegments[idx].color *= materialColor;
 
 			// BSDF
@@ -578,18 +556,6 @@ __global__ void shadeRealMaterial(
 				// ideal reflection
 				glm::vec3 new_direction = glm::reflect(pathSegments[idx].ray.direction, intersection.surfaceNormal);
 				glm::vec3 new_origin = pathSegments[idx].ray.direction * intersection.t + pathSegments[idx].ray.origin + EPSILON * new_direction;
-				//pathSegments[idx].ray.direction -
-				//2 * glm::dot(intersection.surfaceNormal, pathSegments[idx].ray.direction) * intersection.surfaceNormal;
-
-				//if (idx == 3000)
-				//{
-				//	printf("test light origin %f,%f,%f direction %f,%f,%f to new origin %f,%f,%f direction %f,%f,%f\n",
-				//		pathSegments[idx].ray.origin.x, pathSegments[idx].ray.origin.y, pathSegments[idx].ray.origin.z,
-				//		pathSegments[idx].ray.direction.x, pathSegments[idx].ray.direction.y, pathSegments[idx].ray.direction.z,
-				//		new_origin.x, new_origin.y, new_origin.z,
-				//		new_direction.x, new_direction.y, new_direction.z
-				//		);
-				//}
 
 				pathSegments[idx].ray.direction = new_direction;
 				pathSegments[idx].ray.origin = new_origin;
@@ -629,12 +595,6 @@ __global__ void shadeRealMaterial(
 					glm::vec3 new_direction = (eta * cosi - glm::sqrt(k)) * n + pathSegments[idx].ray.direction * eta;
 					glm::vec3 new_origin = pathSegments[idx].ray.direction * intersection.t + pathSegments[idx].ray.origin + EPSILON_GLASS * new_direction;
 					
-					//printf("refraction light origin %f,%f,%f direction %f,%f,%f to new origin %f,%f,%f direction %f,%f,%f\n",
-					//	pathSegments[idx].ray.origin.x, pathSegments[idx].ray.origin.y, pathSegments[idx].ray.origin.z,
-					//	pathSegments[idx].ray.direction.x, pathSegments[idx].ray.direction.y, pathSegments[idx].ray.direction.z,
-					//	new_origin.x, new_origin.y, new_origin.z,
-					//	new_direction.x, new_direction.y, new_direction.z
-					//	);
 					pathSegments[idx].ray.direction = new_direction;
 					pathSegments[idx].ray.origin = new_origin;
 				}
@@ -650,6 +610,11 @@ __global__ void shadeRealMaterial(
 				pathSegments[idx].ray.origin = new_origin;
 			}
 			pathSegments[idx].remainingBounces--;
+
+			if (!DIRECT_LIGHTING && pathSegments[idx].remainingBounces <= 0)
+			{
+				pathSegments[idx].color = glm::vec3(0.0f);
+			}
 		}
 	}
 	else
@@ -838,20 +803,27 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 
 		// stream compaction
 		//cudaMemcpy(tmp_segment, dev_paths, num_paths * sizeof(PathSegment), cudaMemcpyDeviceToDevice);
-
-		double time;
-		// first compact ones with remaining bounces.
-		int nonZeroCount = StreamCompaction::Common::pathCompact(num_paths, tmp_segment, dev_paths, time, blockSize1d, true);
-		// dev_path_end should be the start point of 0 on the original dev_paths.
-		dev_path_end = dev_paths + nonZeroCount;
-		// tmp_segment_end should be the start point of 0 on tmp_segment.
-		tmp_segment_end = tmp_segment + nonZeroCount;
-		// now we have 1s on tmp_segment to tmp_segment_end. we need to compact 0 as well.
-		int zeroCount = StreamCompaction::Common::pathCompact(num_paths, tmp_segment_end, dev_paths, time, blockSize1d, false);
-		// now we have 0s as well, copy both back to dev_paths.
-		cudaMemcpy(dev_paths, tmp_segment, nonZeroCount * sizeof(PathSegment), cudaMemcpyDeviceToDevice);
-		cudaMemcpy(dev_path_end, tmp_segment_end, zeroCount * sizeof(PathSegment), cudaMemcpyDeviceToDevice);
-		checkCUDAError("Stream compaction.");
+		if (COMPACTION)
+		{
+			double time;
+			// first compact ones with remaining bounces.
+			int nonZeroCount = StreamCompaction::Common::pathCompact(num_paths, tmp_segment, dev_paths, time, blockSize1d, true);
+			// dev_path_end should be the start point of 0 on the original dev_paths.
+			dev_path_end = dev_paths + nonZeroCount;
+			// tmp_segment_end should be the start point of 0 on tmp_segment.
+			tmp_segment_end = tmp_segment + nonZeroCount;
+			// now we have 1s on tmp_segment to tmp_segment_end. we need to compact 0 as well.
+			int zeroCount = StreamCompaction::Common::pathCompact(num_paths, tmp_segment_end, dev_paths, time, blockSize1d, false);
+			// now we have 0s as well, copy both back to dev_paths.
+			cudaMemcpy(dev_paths, tmp_segment, nonZeroCount * sizeof(PathSegment), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(dev_path_end, tmp_segment_end, zeroCount * sizeof(PathSegment), cudaMemcpyDeviceToDevice);
+			checkCUDAError("Stream compaction.");
+		}
+		else if (depth >= maxDepth)
+		{
+			iterationComplete = true;
+			printf("Iteration complete for no compaction\n");
+		}
 
 		if (DIRECT_LIGHTING)
 		{
